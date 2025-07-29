@@ -16,10 +16,9 @@
 #define AF_INET 2
 #define AF_INET6 10
 
-#define MAX_MSG_SIZE 512
-#define MAX_HOST_LEN 128
-#define MAX_PATH_LEN 256
-#define MAX_UA_LEN 256
+// Reduced sizes to fit within BPF stack limit
+#define MAX_HOST_LEN 64
+#define MAX_PATH_LEN 128
 
 struct event {
 	gadget_timestamp timestamp_raw;
@@ -34,20 +33,24 @@ struct event {
 	char host[MAX_HOST_LEN];
 	char path[MAX_PATH_LEN];
 	__u16 status_code;
-	__u64 content_length;
-	char user_agent[MAX_UA_LEN];
 	__u32 latency_ms;
 };
 
-const volatile __u32 max_body_size = 0;
 const volatile bool capture_request = true;
 const volatile bool capture_response = true;
 const volatile __u32 min_latency_ms = 0;
 
-GADGET_PARAM(max_body_size);
 GADGET_PARAM(capture_request);
 GADGET_PARAM(capture_response);
 GADGET_PARAM(min_latency_ms);
+
+// Per-CPU array to avoid stack overflow
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, struct event);
+} event_heap SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -59,8 +62,11 @@ struct {
 GADGET_TRACER_MAP(events, 1024 * 256);
 GADGET_TRACER(http, events, event);
 
-// Simplified HTTP tracer - tracks TCP connections on HTTP/HTTPS ports
-// Real HTTP content parsing would require TC or socket filter programs
+static __always_inline struct event *get_event_from_heap()
+{
+	__u32 zero = 0;
+	return bpf_map_lookup_elem(&event_heap, &zero);
+}
 
 SEC("kprobe/tcp_sendmsg")
 int BPF_KPROBE(trace_tcp_sendmsg, struct sock *sk)
@@ -72,16 +78,17 @@ int BPF_KPROBE(trace_tcp_sendmsg, struct sock *sk)
 	if (gadget_should_discard_mntns_id(mntns_id))
 		return 0;
 	
-	struct event event = {};
+	// Use per-CPU heap to avoid stack overflow
+	struct event *event = get_event_from_heap();
+	if (!event)
+		return 0;
 	
-	// For now, we'll skip HTTP content inspection in kprobe
-	// This is a simplified version that just tracks TCP connections
-	// Real HTTP parsing would require different approach (e.g., TC or socket filter)
+	__builtin_memset(event, 0, sizeof(*event));
 	
 	// Fill basic info
-	event.timestamp_raw = bpf_ktime_get_boot_ns();
-	event.mntns_id = mntns_id;
-	gadget_process_populate(&event.proc);
+	event->timestamp_raw = bpf_ktime_get_boot_ns();
+	event->mntns_id = mntns_id;
+	gadget_process_populate(&event->proc);
 	
 	// Filter based on current task
 	if (gadget_should_discard_data_current())
@@ -89,41 +96,45 @@ int BPF_KPROBE(trace_tcp_sendmsg, struct sock *sk)
 	
 	// Extract socket info
 	struct inet_sock *inet = (struct inet_sock *)sk;
-	BPF_CORE_READ_INTO(&event.src.port, inet, inet_sport);
-	BPF_CORE_READ_INTO(&event.dst.port, sk, __sk_common.skc_dport);
-	event.src.port = bpf_ntohs(event.src.port);
-	event.dst.port = bpf_ntohs(event.dst.port);
+	BPF_CORE_READ_INTO(&event->src.port, inet, inet_sport);
+	BPF_CORE_READ_INTO(&event->dst.port, sk, __sk_common.skc_dport);
+	event->src.port = bpf_ntohs(event->src.port);
+	event->dst.port = bpf_ntohs(event->dst.port);
+	
+	// Only track HTTP/HTTPS ports
+	__u16 dst_port = event->dst.port;
+	if (dst_port != 80 && dst_port != 443 && dst_port != 8080 && dst_port != 8443)
+		return 0;
 	
 	// Extract IP addresses
 	__u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
 	if (family == AF_INET) {
-		BPF_CORE_READ_INTO(&event.src.addr_raw.v4, sk, __sk_common.skc_rcv_saddr);
-		BPF_CORE_READ_INTO(&event.dst.addr_raw.v4, sk, __sk_common.skc_daddr);
-		event.src.version = event.dst.version = 4;
+		BPF_CORE_READ_INTO(&event->src.addr_raw.v4, sk, __sk_common.skc_rcv_saddr);
+		BPF_CORE_READ_INTO(&event->dst.addr_raw.v4, sk, __sk_common.skc_daddr);
+		event->src.version = event->dst.version = 4;
 	} else if (family == AF_INET6) {
-		BPF_CORE_READ_INTO(&event.src.addr_raw.v6, sk,
+		BPF_CORE_READ_INTO(&event->src.addr_raw.v6, sk,
 				   __sk_common.skc_v6_rcv_saddr.in6_u.u6_addr32);
-		BPF_CORE_READ_INTO(&event.dst.addr_raw.v6, sk,
+		BPF_CORE_READ_INTO(&event->dst.addr_raw.v6, sk,
 				   __sk_common.skc_v6_daddr.in6_u.u6_addr32);
-		event.src.version = event.dst.version = 6;
+		event->src.version = event->dst.version = 6;
 	}
 	
 	// Determine protocol
-	__u16 dst_port = event.dst.port;
 	if (dst_port == 443 || dst_port == 8443)
-		__builtin_memcpy(event.proto, "HTTPS", 6);
+		__builtin_memcpy(event->proto, "HTTPS", 6);
 	else
-		__builtin_memcpy(event.proto, "HTTP", 5);
+		__builtin_memcpy(event->proto, "HTTP", 5);
 	
 	// Set default values for HTTP fields
-	__builtin_memcpy(event.method, "GET", 4);
-	__builtin_memcpy(event.path, "/", 2);
-	event.host[0] = '\0';
+	__builtin_memcpy(event->method, "GET", 4);
+	__builtin_memcpy(event->path, "/", 2);
+	event->host[0] = '\0';
 	
 	// Store event for matching with response
 	__u64 key = bpf_get_current_pid_tgid();
-	key = (key << 32) | ((__u64)event.src.port << 16) | event.dst.port;
-	bpf_map_update_elem(&http_events, &key, &event, BPF_ANY);
+	key = (key << 32) | ((__u64)event->src.port << 16) | event->dst.port;
+	bpf_map_update_elem(&http_events, &key, event, BPF_ANY);
 	
 	return 0;
 }
@@ -138,12 +149,6 @@ int BPF_KPROBE(trace_tcp_recvmsg, struct sock *sk)
 	if (gadget_should_discard_mntns_id(mntns_id))
 		return 0;
 	
-	// For simplified version, assume all responses are HTTP 200 OK
-	// Real implementation would need different approach
-	
-	// Try to find matching request
-	__u64 key = bpf_get_current_pid_tgid();
-	
 	// Extract socket info for lookup
 	struct inet_sock *inet = (struct inet_sock *)sk;
 	__u16 sport, dport;
@@ -152,45 +157,55 @@ int BPF_KPROBE(trace_tcp_recvmsg, struct sock *sk)
 	sport = bpf_ntohs(sport);
 	dport = bpf_ntohs(dport);
 	
+	// Only track HTTP/HTTPS ports
+	if (sport != 80 && sport != 443 && sport != 8080 && sport != 8443)
+		return 0;
+	
+	// Try to find matching request
+	__u64 key = bpf_get_current_pid_tgid();
 	// Reversed for response lookup
 	key = (key << 32) | ((__u64)dport << 16) | sport;
 	
 	struct event *req_event = bpf_map_lookup_elem(&http_events, &key);
 	if (!req_event) {
 		// No matching request found, create new event
-		struct event resp_event = {};
-		resp_event.timestamp_raw = bpf_ktime_get_boot_ns();
-		resp_event.mntns_id = mntns_id;
-		gadget_process_populate(&resp_event.proc);
+		struct event *resp_event = get_event_from_heap();
+		if (!resp_event)
+			return 0;
+		
+		__builtin_memset(resp_event, 0, sizeof(*resp_event));
+		resp_event->timestamp_raw = bpf_ktime_get_boot_ns();
+		resp_event->mntns_id = mntns_id;
+		gadget_process_populate(&resp_event->proc);
 		
 		if (gadget_should_discard_data_current())
 			return 0;
 		
 		// Fill response-specific fields
-		resp_event.status_code = 200;
-		resp_event.src.port = sport;
-		resp_event.dst.port = dport;
+		resp_event->status_code = 200;
+		resp_event->src.port = sport;
+		resp_event->dst.port = dport;
 		
 		// Extract IP addresses
 		__u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
 		if (family == AF_INET) {
-			BPF_CORE_READ_INTO(&resp_event.src.addr_raw.v4, sk, __sk_common.skc_rcv_saddr);
-			BPF_CORE_READ_INTO(&resp_event.dst.addr_raw.v4, sk, __sk_common.skc_daddr);
-			resp_event.src.version = resp_event.dst.version = 4;
+			BPF_CORE_READ_INTO(&resp_event->src.addr_raw.v4, sk, __sk_common.skc_rcv_saddr);
+			BPF_CORE_READ_INTO(&resp_event->dst.addr_raw.v4, sk, __sk_common.skc_daddr);
+			resp_event->src.version = resp_event->dst.version = 4;
 		} else if (family == AF_INET6) {
-			BPF_CORE_READ_INTO(&resp_event.src.addr_raw.v6, sk,
+			BPF_CORE_READ_INTO(&resp_event->src.addr_raw.v6, sk,
 					   __sk_common.skc_v6_rcv_saddr.in6_u.u6_addr32);
-			BPF_CORE_READ_INTO(&resp_event.dst.addr_raw.v6, sk,
+			BPF_CORE_READ_INTO(&resp_event->dst.addr_raw.v6, sk,
 					   __sk_common.skc_v6_daddr.in6_u.u6_addr32);
-			resp_event.src.version = resp_event.dst.version = 6;
+			resp_event->src.version = resp_event->dst.version = 6;
 		}
 		
 		if (sport == 443 || sport == 8443)
-			__builtin_memcpy(resp_event.proto, "HTTPS", 6);
+			__builtin_memcpy(resp_event->proto, "HTTPS", 6);
 		else
-			__builtin_memcpy(resp_event.proto, "HTTP", 5);
+			__builtin_memcpy(resp_event->proto, "HTTP", 5);
 		
-		gadget_output_buf(ctx, &events, &resp_event, sizeof(resp_event));
+		gadget_output_buf(ctx, &events, resp_event, sizeof(*resp_event));
 	} else {
 		// Found matching request, calculate latency
 		__u64 now = bpf_ktime_get_boot_ns();

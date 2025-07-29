@@ -54,16 +54,6 @@ datasources:
           description: HTTP response status code
           columns.width: 6
           columns.alignment: right
-      content_length:
-        annotations:
-          description: Content-Length header value
-          columns.width: 12
-          columns.alignment: right
-      user_agent:
-        annotations:
-          description: User-Agent header value
-          columns.width: 64
-          columns.hidden: true
       latency_ms:
         annotations:
           description: Request latency in milliseconds
@@ -71,10 +61,6 @@ datasources:
           columns.alignment: right
 params:
   ebpf:
-    max_body_size:
-      key: max-body-size
-      defaultValue: "0"
-      description: Maximum body size to capture (0 = disabled)
     capture_request:
       key: capture-request
       defaultValue: "true"
