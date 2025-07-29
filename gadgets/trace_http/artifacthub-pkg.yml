@@ -1,0 +1,16 @@
+version: v0.1.0
+name: trace_http
+displayName: Trace HTTP
+createdAt: "2024-01-15T00:00:00Z"
+description: Monitor HTTP and HTTPS requests and responses
+homeURL: https://github.com/inspektor-gadget/inspektor-gadget/tree/main/gadgets/trace_http
+keywords:
+  - http
+  - https
+  - network
+  - trace
+  - observability
+  - performance
+license: Apache-2.0
+provider:
+  name: Inspektor Gadget

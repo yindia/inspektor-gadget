@@ -1,0 +1,85 @@
+---
+title: 'trace_http'
+weight: 20
+description: 'Trace HTTP and HTTPS traffic'
+---
+
+The trace_http gadget monitors HTTP and HTTPS traffic at the application layer, capturing requests and responses along with their metadata.
+
+## Getting Started
+
+```bash
+$ sudo ig run trace_http [flags]
+```
+
+## Description
+
+This gadget traces HTTP/HTTPS traffic by intercepting TCP send and receive operations. It provides visibility into:
+
+- HTTP request methods and paths
+- Response status codes
+- Request/response latency
+- Host headers and user agents
+- Protocol detection (HTTP vs HTTPS)
+
+The gadget uses eBPF to hook into kernel functions, allowing it to capture traffic without modifying applications or using proxies.
+
+## Flags
+
+- `--capture-request`: Enable capturing HTTP requests (default: `true`)
+- `--capture-response`: Enable capturing HTTP responses (default: `true`)
+- `--max-body-size`: Maximum body size to capture in bytes, 0 = disabled (default: `0`)
+- `--min-latency`: Minimum latency in milliseconds to report (default: `0`)
+
+## Output Columns
+
+- `TIMESTAMP`: Event timestamp
+- `COMM`: Process name
+- `PID`: Process ID
+- `SRC`: Source IP address and port
+- `DST`: Destination IP address and port
+- `PROTO`: Protocol (HTTP or HTTPS)
+- `METHOD`: HTTP method (for requests)
+- `HOST`: Host header value
+- `PATH`: Request path
+- `STATUS`: HTTP response status code
+- `LATENCY`: Request latency in milliseconds
+
+## Examples
+
+### Monitor all HTTP traffic
+
+```bash
+$ sudo ig run trace_http
+TIMESTAMP                           COMM         PID      SRC                  DST                  PROTO METHOD HOST                PATH              STATUS LATENCY
+2024-01-15T10:23:45.123456789Z     curl         12345    192.168.1.10:54321  93.184.216.34:80    HTTP  GET    example.com         /               200    45
+2024-01-15T10:23:46.234567890Z     wget         12346    192.168.1.10:54322  93.184.216.34:443   HTTPS GET    example.com         /index.html     200    120
+```
+
+### Monitor slow requests only
+
+```bash
+$ sudo ig run trace_http --min-latency=500
+```
+
+This will only show requests that took more than 500ms to complete.
+
+### Monitor requests to specific container
+
+```bash
+$ sudo ig run trace_http -c my-container
+```
+
+## Use Cases
+
+1. **Performance Monitoring**: Track slow HTTP requests and identify bottlenecks
+2. **Security Auditing**: Monitor unexpected HTTP traffic or connections
+3. **Debugging**: Trace HTTP interactions without modifying application code
+4. **Service Mesh Observability**: Understand service-to-service communication
+
+## Limitations
+
+- HTTPS traffic content is encrypted; only metadata is visible
+- HTTP/2 multiplexing may affect request/response correlation
+- Very short-lived connections might be missed
+- Body content is not captured by default for performance reasons

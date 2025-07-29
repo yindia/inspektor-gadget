@@ -1,0 +1,89 @@
+name: trace http
+description: trace HTTP/HTTPS requests and responses
+homepageURL: https://inspektor-gadget.io/
+documentationURL: https://www.inspektor-gadget.io/docs/latest/gadgets/trace_http
+sourceURL: https://github.com/inspektor-gadget/inspektor-gadget/tree/main/gadgets/trace_http
+datasources:
+  http:
+    fields:
+      timestamp_raw:
+        annotations:
+          template: timestamp
+      mntns_id:
+        annotations:
+          template: mntns
+      comm:
+        annotations:
+          template: comm
+      pid:
+        annotations:
+          template: pid
+      tid:
+        annotations:
+          template: tid
+      uid:
+        annotations:
+          template: uid
+      gid:
+        annotations:
+          template: gid
+      src:
+        annotations:
+          template: l4endpoint
+      dst:
+        annotations:
+          template: l4endpoint
+      proto:
+        annotations:
+          description: Protocol (HTTP/HTTPS)
+          columns.width: 8
+      method:
+        annotations:
+          description: HTTP method (GET, POST, etc.)
+          columns.width: 8
+      host:
+        annotations:
+          description: Host header value
+          columns.width: 32
+      path:
+        annotations:
+          description: Request path
+          columns.width: 64
+      status_code:
+        annotations:
+          description: HTTP response status code
+          columns.width: 6
+          columns.alignment: right
+      content_length:
+        annotations:
+          description: Content-Length header value
+          columns.width: 12
+          columns.alignment: right
+      user_agent:
+        annotations:
+          description: User-Agent header value
+          columns.width: 64
+          columns.hidden: true
+      latency_ms:
+        annotations:
+          description: Request latency in milliseconds
+          columns.width: 10
+          columns.alignment: right
+params:
+  ebpf:
+    max_body_size:
+      key: max-body-size
+      defaultValue: "0"
+      description: Maximum body size to capture (0 = disabled)
+    capture_request:
+      key: capture-request
+      defaultValue: "true"
+      description: Capture HTTP requests
+    capture_response:
+      key: capture-response
+      defaultValue: "true"
+      description: Capture HTTP responses
+    min_latency_ms:
+      key: min-latency
+      defaultValue: "0"
+      description: Minimum latency in milliseconds to report
