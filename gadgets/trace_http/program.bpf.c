@@ -83,8 +83,8 @@ int BPF_KPROBE(trace_tcp_sendmsg, struct sock *sk)
 	event.mntns_id = mntns_id;
 	gadget_process_populate(&event.proc);
 	
-	// Filter based on common data
-	if (gadget_should_discard_data(&event.proc))
+	// Filter based on current task
+	if (gadget_should_discard_data_current())
 		return 0;
 	
 	// Extract socket info
@@ -163,7 +163,7 @@ int BPF_KPROBE(trace_tcp_recvmsg, struct sock *sk)
 		resp_event.mntns_id = mntns_id;
 		gadget_process_populate(&resp_event.proc);
 		
-		if (gadget_should_discard_data(&resp_event.proc))
+		if (gadget_should_discard_data_current())
 			return 0;
 		
 		// Fill response-specific fields
