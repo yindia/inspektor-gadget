@@ -9,7 +9,7 @@
 #include <gadget/common.h>
 #include <gadget/macros.h>
 #include <gadget/types.h>
-#include <gadget/sockets.h>
+#include <gadget/mntns_filter.h>
 
 #define MAX_MSG_SIZE 512
 #define MAX_HOST_LEN 128
@@ -180,11 +180,26 @@ int BPF_KPROBE(trace_tcp_sendmsg, struct sock *sk, struct msghdr *msg, size_t si
 	if (gadget_should_discard_data(&event.proc))
 		return 0;
 	
-	// Extract socket info using gadget helper
-	struct gadget_socket_data sock_data = {};
-	gadget_socket_lookup(sk, &sock_data);
-	event.src = sock_data.src;
-	event.dst = sock_data.dst;
+	// Extract socket info
+	struct inet_sock *inet = (struct inet_sock *)sk;
+	BPF_CORE_READ_INTO(&event.src.port, inet, inet_sport);
+	BPF_CORE_READ_INTO(&event.dst.port, inet, inet_dport);
+	event.src.port = bpf_ntohs(event.src.port);
+	event.dst.port = bpf_ntohs(event.dst.port);
+	
+	// Extract IP addresses
+	__u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
+	if (family == AF_INET) {
+		BPF_CORE_READ_INTO(&event.src.addr_raw.v4, sk, __sk_common.skc_rcv_saddr);
+		BPF_CORE_READ_INTO(&event.dst.addr_raw.v4, sk, __sk_common.skc_daddr);
+		event.src.version = event.dst.version = 4;
+	} else if (family == AF_INET6) {
+		BPF_CORE_READ_INTO(&event.src.addr_raw.v6, sk,
+				   __sk_common.skc_v6_rcv_saddr.in6_u.u6_addr32);
+		BPF_CORE_READ_INTO(&event.dst.addr_raw.v6, sk,
+				   __sk_common.skc_v6_daddr.in6_u.u6_addr32);
+		event.src.version = event.dst.version = 6;
+	}
 	
 	// Determine protocol
 	__u16 dst_port = event.dst.port;
@@ -229,11 +244,17 @@ int BPF_KPROBE(trace_tcp_recvmsg, struct sock *sk, struct msghdr *msg, size_t le
 	
 	// Try to find matching request
 	__u64 key = bpf_get_current_pid_tgid();
-	struct gadget_socket_data sock_data = {};
-	gadget_socket_lookup(sk, &sock_data);
+	
+	// Extract socket info for lookup
+	struct inet_sock *inet = (struct inet_sock *)sk;
+	__u16 sport, dport;
+	BPF_CORE_READ_INTO(&sport, inet, inet_sport);
+	BPF_CORE_READ_INTO(&dport, inet, inet_dport);
+	sport = bpf_ntohs(sport);
+	dport = bpf_ntohs(dport);
 	
 	// Reversed for response lookup
-	key = (key << 32) | ((__u64)sock_data.dst.port << 16) | sock_data.src.port;
+	key = (key << 32) | ((__u64)dport << 16) | sport;
 	
 	struct event *req_event = bpf_map_lookup_elem(&http_events, &key);
 	if (!req_event) {
@@ -248,10 +269,24 @@ int BPF_KPROBE(trace_tcp_recvmsg, struct sock *sk, struct msghdr *msg, size_t le
 		
 		// Fill response-specific fields
 		resp_event.status_code = extract_status_code(data);
-		resp_event.src = sock_data.src;
-		resp_event.dst = sock_data.dst;
+		resp_event.src.port = sport;
+		resp_event.dst.port = dport;
 		
-		if (sock_data.src.port == 443 || sock_data.src.port == 8443)
+		// Extract IP addresses
+		__u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
+		if (family == AF_INET) {
+			BPF_CORE_READ_INTO(&resp_event.src.addr_raw.v4, sk, __sk_common.skc_rcv_saddr);
+			BPF_CORE_READ_INTO(&resp_event.dst.addr_raw.v4, sk, __sk_common.skc_daddr);
+			resp_event.src.version = resp_event.dst.version = 4;
+		} else if (family == AF_INET6) {
+			BPF_CORE_READ_INTO(&resp_event.src.addr_raw.v6, sk,
+					   __sk_common.skc_v6_rcv_saddr.in6_u.u6_addr32);
+			BPF_CORE_READ_INTO(&resp_event.dst.addr_raw.v6, sk,
+					   __sk_common.skc_v6_daddr.in6_u.u6_addr32);
+			resp_event.src.version = resp_event.dst.version = 6;
+		}
+		
+		if (sport == 443 || sport == 8443)
 			__builtin_memcpy(resp_event.proto, "HTTPS", 6);
 		else
 			__builtin_memcpy(resp_event.proto, "HTTP", 5);
