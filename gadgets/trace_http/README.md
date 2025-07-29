@@ -1,6 +1,6 @@
 # trace_http
 
-The trace_http gadget monitors HTTP and HTTPS traffic at the application layer, capturing requests and responses along with their metadata.
+The trace_http gadget monitors TCP connections on HTTP and HTTPS ports (80, 443, 8080, 8443), tracking connection latency and basic metadata. This is a simplified version that focuses on connection-level monitoring rather than deep packet inspection.
 
 ## Getting Started
 
@@ -10,17 +10,16 @@ $ sudo ig run trace_http
 
 ## Description
 
-This gadget traces HTTP/HTTPS traffic by hooking into the TCP send and receive functions. It can capture:
+This gadget traces TCP connections on common HTTP/HTTPS ports by hooking into the TCP send and receive functions. It tracks:
 
-- HTTP methods (GET, POST, PUT, DELETE, etc.)
-- Request paths and query parameters
-- Host headers
-- Response status codes
-- Request/response latency
-- User-Agent headers
-- Content length
+- Source and destination IP addresses and ports
+- Process information (PID, command, user)
+- Connection timing and latency
+- Protocol detection based on port (HTTP vs HTTPS)
 
 The gadget automatically detects whether traffic is HTTP or HTTPS based on the destination port (443/8443 for HTTPS).
+
+Note: This is a simplified implementation that doesn't inspect packet contents. For deep HTTP inspection, consider using TC (Traffic Control) or socket filter based approaches.
 
 ## Parameters
 
