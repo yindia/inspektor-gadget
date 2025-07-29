@@ -6,27 +6,6 @@ sourceURL: https://github.com/inspektor-gadget/inspektor-gadget/tree/main/gadget
 datasources:
   http:
     fields:
-      timestamp_raw:
-        annotations:
-          template: timestamp
-      mntns_id:
-        annotations:
-          template: mntns
-      comm:
-        annotations:
-          template: comm
-      pid:
-        annotations:
-          template: pid
-      tid:
-        annotations:
-          template: tid
-      uid:
-        annotations:
-          template: uid
-      gid:
-        annotations:
-          template: gid
       src:
         annotations:
           template: l4endpoint

@@ -22,7 +22,6 @@
 
 struct event {
 	gadget_timestamp timestamp_raw;
-	gadget_mntns_id mntns_id;
 	struct gadget_process proc;
 	
 	struct gadget_l4endpoint_t src;
@@ -74,6 +73,7 @@ int BPF_KPROBE(trace_tcp_sendmsg, struct sock *sk)
 	if (!capture_request)
 		return 0;
 	
+	// Get mount namespace id for filtering
 	gadget_mntns_id mntns_id = gadget_get_current_mntns_id();
 	if (gadget_should_discard_mntns_id(mntns_id))
 		return 0;
@@ -87,7 +87,6 @@ int BPF_KPROBE(trace_tcp_sendmsg, struct sock *sk)
 	
 	// Fill basic info
 	event->timestamp_raw = bpf_ktime_get_boot_ns();
-	event->mntns_id = mntns_id;
 	gadget_process_populate(&event->proc);
 	
 	// Filter based on current task
@@ -145,9 +144,17 @@ int BPF_KPROBE(trace_tcp_recvmsg, struct sock *sk)
 	if (!capture_response)
 		return 0;
 	
+	// Get mount namespace id for filtering
 	gadget_mntns_id mntns_id = gadget_get_current_mntns_id();
 	if (gadget_should_discard_mntns_id(mntns_id))
 		return 0;
+	
+	// Get network namespace id
+	gadget_netns_id netns_id = 0;
+	struct sock *skp = sk;
+	struct net *net_ns = BPF_CORE_READ(skp, __sk_common.skc_net.net);
+	if (net_ns)
+		netns_id = BPF_CORE_READ(net_ns, ns.inum);
 	
 	// Extract socket info for lookup
 	struct inet_sock *inet = (struct inet_sock *)sk;
@@ -175,7 +182,6 @@ int BPF_KPROBE(trace_tcp_recvmsg, struct sock *sk)
 		
 		__builtin_memset(resp_event, 0, sizeof(*resp_event));
 		resp_event->timestamp_raw = bpf_ktime_get_boot_ns();
-		resp_event->mntns_id = mntns_id;
 		gadget_process_populate(&resp_event->proc);
 		
 		if (gadget_should_discard_data_current())
